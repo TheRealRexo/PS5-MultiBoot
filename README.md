@@ -1,6 +1,6 @@
-# ps5-linux-loader (fork)
+# PS5-MultiBoot (fork)
 
-**ps5-linux-loader** boots Linux on a jailbroken PS5 (rest-mode resume) by defeating the hypervisor. Powered by 8 CPU cores (16 threads) at 3.5 GHz and a GPU at 2.23 GHz, it turns your PS5 Phat, Slim or Pro running **13.00, 13.20, 13.40, 13.42, or 13.60** into a capable desktop PC for Steam games and emulators.
+**PS5-MultiBoot** boots Linux on a jailbroken PS5 (rest-mode resume) by defeating the hypervisor. Powered by 8 CPU cores (16 threads) at 3.5 GHz and a GPU at 2.23 GHz, it turns your PS5 Phat, Slim or Pro running **13.00, 13.20, 13.40, 13.42, or 13.60** into a capable desktop PC for Steam games and emulators.
 
 This repository is **TheRealRexo's fork** of the upstream [ps5-linux/ps5-linux-loader](https://github.com/ps5-linux/ps5-linux-loader). It adds a built-in WebUI + anonymous FTP server, M.2 install tools that store the OS as a single `.img` file, USB-less boot, and an in-payload "Download here" button that fetches official OS images straight from the GitHub release.
 
@@ -70,7 +70,7 @@ Optional: USB WLAN adapter, M.2 SSD compatible with PS5, Bluetooth dongle for Du
 3. Plug USB into front bottom Type-C or rear Type-A (avoid front top Type-A, USB 2.0).
 4. Run the jailbreak and send payload:
    ```
-   socat -t 99999999 - TCP:$PS5IP:9021 < ps5-linux-loader.elf
+   socat -t 99999999 - TCP:$PS5IP:9021 < ps5-multiboot.elf
    ```
 5. Wait for orange LED → press power → boot Linux (white LED = success).
 
@@ -88,7 +88,7 @@ Disable screen saver (buggy); hold kernel packages (`apt-mark hold`); install Fi
 
 Each tagged release ships:
 
-- `ps5-linux-loader.elf` + `m2_init` / `ps5-osinstall` / `ps5-osexec` (with checksums).
+- `ps5-multiboot.elf` + `m2_init` / `ps5-osinstall` / `ps5-osexec` (with checksums).
 - Boot tarballs: `ps5-<distro>-boot.tar.gz` (bzImage, initrd.img, cmdline.txt, vram.txt; initrd patched to loop-mount the `.img`).
 
 ## Building from source
@@ -99,7 +99,7 @@ export LLVM_CONFIG=/opt/homebrew/opt/llvm/bin/llvm-config
 make
 ```
 
-Writes `bin/ps5-linux-loader.elf`.
+Writes `bin/ps5-multiboot.elf`.
 
 ## Repository layout
 
