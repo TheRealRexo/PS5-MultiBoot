@@ -2,7 +2,7 @@
 
 **ps5-linux-loader** boots Linux on a jailbroken PS5 (rest-mode resume) by defeating the hypervisor. Powered by 8 CPU cores (16 threads) at 3.5 GHz and a GPU at 2.23 GHz, it turns your PS5 Phat, Slim or Pro running **13.00, 13.20, 13.40, 13.42, or 13.60** into a capable desktop PC for Steam games and emulators.
 
-This repository is **TheRealRexo's fork** of the upstream [ps5-linux/ps5-linux-loader](https://github.com/ps5-linux/ps5-linux-loader). It adds a built-in WebUI + anonymous FTP server, M.2 install tools that store the OS as a single `.img` file, and USB-less boot.
+This repository is **TheRealRexo's fork** of the upstream [ps5-linux/ps5-linux-loader](https://github.com/ps5-linux/ps5-linux-loader). It adds a built-in WebUI + anonymous FTP server, M.2 install tools that store the OS as a single `.img` file, USB-less boot, and an in-payload "Download here" button that fetches official OS images straight from the GitHub release.
 
 ## Features
 
@@ -19,6 +19,7 @@ This repository is **TheRealRexo's fork** of the upstream [ps5-linux/ps5-linux-l
 - **Multi-firmware HV exploit**: 3.00–7.61, 11.60, 12.xx, and 13.00/13.20/13.40/13.42/13.60 (Phat/Slim); 13.60 (Pro), auto-selected from the running firmware. Only 13.xx firmwares support the REXO fork features (M.2 install, USB-less boot, and `/mnt/ext1` searches).
 - **Built-in WebUI** on port 8080 (no auto-boot) + anonymous FTP on port 21
 - **OS-image picker**, boot/install target selector, install-size field, VRAM setting
+- **In-payload "Download here"**: fetch official OS images from the GitHub release straight onto the console, decompress XZ into a loop-mountable `.img` (parts concatenated)
 - **File manager** (list / upload / delete), including `/mnt/ext1` for USB-free setups
 - **Hardware / driver support table** (GPU, WiFi/Bluetooth, Ethernet, audio, NVMe, USB)
 - **M.2 install tools** (`m2_init`, `ps5-osinstall`, `ps5-osexec`) storing the OS as a single `.img`
@@ -37,7 +38,7 @@ Support for 1.xx / 2.xx may come later. You cannot downgrade firmware.
 
 ## Boot files & USB-less boot
 
-The payload no longer downloads anything. The OS image is transferred to the PS5 by the user (FTP port 21, WebUI upload, or a USB stick), and the boot files are found automatically.
+The payload can download the OS image straight from the GitHub release via the in-payload **Download here** button, or the user transfers it (FTP port 21, WebUI upload, or a USB stick). The boot files are found automatically.
 
 The loader looks for the boot files (`bzImage`, `initrd.img`, `cmdline.txt`, `vram.txt`) in:
 
