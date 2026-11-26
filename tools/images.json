@@ -1,0 +1,16 @@
+{
+  "name": "PS5 Linux Loader - OS Images",
+  "base_url": "https://github.com/TheRealRexo/PS5-Linux-Loader/releases/latest/download",
+  "repo": "TheRealRexo/PS5-Linux-Loader",
+  "images": [
+    { "name": "Ubuntu 26.04", "id": "ubuntu2604", "filename": "ps5-ubuntu2604-os", "parts": 1, "category": "OS Images" },
+    { "name": "Arch Linux", "id": "arch", "filename": "ps5-arch-os", "parts": 1, "category": "OS Images" },
+    { "name": "CachyOS", "id": "cachyos", "filename": "ps5-cachyos-os", "parts": 1, "category": "OS Images" },
+    { "name": "Fedora", "id": "fedora", "filename": "ps5-fedora-os", "parts": 1, "category": "OS Images" },
+    { "name": "Proxmox VE", "id": "proxmox", "filename": "ps5-proxmox-os", "parts": 1, "category": "OS Images" },
+    { "name": "Debian", "id": "debian", "filename": "ps5-debian-os", "parts": 1, "category": "OS Images" },
+    { "name": "Bazzite", "id": "bazzite", "filename": "ps5-bazzite-os", "parts": 2, "category": "OS Images" },
+    { "name": "Bazzite (Deck)", "id": "bazzite-deck", "filename": "ps5-bazzite-deck-os", "parts": 3, "category": "OS Images" },
+    { "name": "SteamOS", "id": "steamos", "filename": "ps5-steamos-os", "parts": 2, "category": "OS Images" }
+  ]
+}

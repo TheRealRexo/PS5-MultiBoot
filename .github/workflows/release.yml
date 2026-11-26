@@ -1,0 +1,340 @@
+name: Release
+
+# Builds a complete release in one shot:
+#   1. the ps5-linux-loader payload (bin/ps5-linux-loader.elf) + storage tools,
+#   2. "OS images" -- the official ps5-linux disk images from
+#      ps5-linux/ps5-linux-image with the M.2 / storage tooling baked into their
+#      root filesystem (via tools/inject-os-image.sh) so they work with the
+#      loader's install + loop-mount flow.
+#
+# Run it from Actions -> Release -> Run workflow, or push a tag like v1.0.0.
+#
+# Each image needs ~12 GB uncompressed; a free-disk-space step runs first so a
+# stock ubuntu-latest runner has room. Bazzite and Bazzite Deck are much larger
+# (~4-6 GB compressed, tens of GB raw) -- bump `runs-on` to a larger runner for
+# those if a build fails for lack of disk space.
+
+on:
+  workflow_dispatch:
+    inputs:
+      distros:
+        description: >-
+          Comma-separated distros to wrap, or "all". Available: ubuntu2604,
+          arch, cachyos, fedora, proxmox, debian, bazzite, bazzite-deck, steamos
+        required: true
+        default: ubuntu2604,arch,cachyos,fedora,proxmox,debian,bazzite,bazzite-deck,steamos
+      tag:
+        description: Release tag
+        required: true
+        default: v1.0.0
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  # Public mirror the official ps5-linux images are published to.
+  R2_BASE: https://pub-561df4012f1a46fbbdf618d5cc5941f6.r2.dev
+  # Every distro published by ps5-linux/ps5-linux-image.
+  ALL_DISTROS: ubuntu2604,arch,cachyos,fedora,proxmox,debian,bazzite,bazzite-deck,steamos
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      distros: ${{ steps.set.outputs.distros }}
+      tag: ${{ steps.set.outputs.tag }}
+    steps:
+      - id: set
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            list="${{ inputs.distros }}"
+            tag="${{ inputs.tag }}"
+          else
+            list="$ALL_DISTROS"
+            tag="${GITHUB_REF_NAME}"
+          fi
+
+          # "all" (or empty) means every distro upstream publishes.
+          case "$(echo "$list" | xargs)" in
+            ""|all|ALL|All) list="$ALL_DISTROS" ;;
+          esac
+
+          json="["
+          IFS=',' read -ra arr <<< "$list"
+          for raw in "${arr[@]}"; do
+            d="$(echo "$raw" | xargs)"
+            [ -n "$d" ] || continue
+            [ "$json" != "[" ] && json="$json,"
+            json="$json\"$d\""
+          done
+          json="$json]"
+
+          echo "distros=$json" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "will wrap: $json  ->  release $tag"
+
+  payload:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Fetch ps5-payload-sdk (prebuilt)
+        run: |
+          set -euo pipefail
+          curl -fL "https://github.com/ps5-payload-dev/sdk/releases/latest/download/ps5-payload-sdk.zip" -o sdk.zip
+          unzip -q sdk.zip
+          prospero="$(find "$PWD" -path '*/toolchain/prospero.mk' -print -quit)"
+          [ -n "$prospero" ] || { echo "prospero.mk not found in SDK zip" >&2; exit 1; }
+          sdk="${prospero%/toolchain/prospero.mk}"
+          echo "PS5_PAYLOAD_SDK=$sdk" >> "$GITHUB_ENV"
+          echo "using SDK at $sdk"
+
+      - name: Build payload
+        run: make
+
+      - name: Build storage tools
+        run: make -C tools
+
+      - name: Stage payload
+        run: |
+          set -euo pipefail
+          mkdir -p payload
+          cp bin/ps5-linux-loader.elf payload/
+          cp tools/m2_init tools/ps5-osinstall tools/ps5-osexec payload/
+          ( cd payload && sha256sum * > payload.sha256 && cat payload.sha256 )
+
+      - name: Upload payload
+        uses: actions/upload-artifact@v6
+        with:
+          name: payload
+          path: payload/
+          if-no-files-found: error
+
+  images:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: ${{ fromJSON(needs.prepare.outputs.distros) }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: false
+
+      - name: Build storage tooling
+        run: make -C tools
+
+      - name: Download official ${{ matrix.distro }} image
+        run: |
+          set -euo pipefail
+          name="ps5-${{ matrix.distro }}-os.img"
+          curl -fL "$R2_BASE/ps5-${{ matrix.distro }}.img.xz" -o source.img.xz
+          unxz -v source.img.xz
+          mv source.img "$name"
+          ls -lh "$name"
+
+      - name: Inject tooling + marker
+        run: sudo bash ./tools/inject-os-image.sh --img "ps5-${{ matrix.distro }}-os.img"
+
+      - name: Extract boot files (bzImage, initrd, cmdline, vram)
+        run: |
+          set -euo pipefail
+          name="ps5-${{ matrix.distro }}-os.img"
+          rm -rf bootfiles && mkdir -p bootfiles
+          LOOP=$(sudo losetup -Pf --show "$name")
+          for _ in $(seq 1 10); do [ -b "${LOOP}p1" ] && break; sleep 1; done
+          sudo mkdir -p /tmp/bootmnt
+          sudo mount -t vfat "${LOOP}p2" /tmp/bootmnt
+          for f in bzImage initrd.img cmdline.txt vram.txt; do
+            if [ -f "/tmp/bootmnt/$f" ]; then cp "/tmp/bootmnt/$f" "bootfiles/$f"; fi
+          done
+          # per-distro initrds, if present
+          for f in /tmp/bootmnt/initrd*.img; do
+            [ -f "$f" ] || continue
+            base=$(basename "$f")
+            cp "$f" "bootfiles/$base"
+            # Patch the initrd so the PS5 loop-mounts the .img at boot.
+            ./tools/patch-initrd.sh "bootfiles/$base" "bootfiles/$base"
+          done
+          sudo umount /tmp/bootmnt
+          sudo losetup -d "$LOOP"
+          tar -czf "ps5-${{ matrix.distro }}-boot.tar.gz" -C bootfiles .
+          ls -lh "ps5-${{ matrix.distro }}-boot.tar.gz" bootfiles/
+
+      - name: Recompress + checksum
+        run: |
+          set -euo pipefail
+          name="ps5-${{ matrix.distro }}-os.img"
+          xz -T0 -4 "$name"
+          sha256sum "$name.xz" > "$name.xz.sha256"
+          ls -lh "$name.xz" "$name.osimage"
+          cat "$name.osimage"
+
+      - name: Upload image
+        uses: actions/upload-artifact@v6
+        with:
+          name: image-${{ matrix.distro }}
+          path: |
+            ps5-${{ matrix.distro }}-os.img.xz
+            ps5-${{ matrix.distro }}-os.img.xz.sha256
+            ps5-${{ matrix.distro }}-os.img.osimage
+            ps5-${{ matrix.distro }}-boot.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: [prepare, payload, images]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v6
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Split images >2 GB into ≤2 GB parts
+        run: |
+          set -euo pipefail
+          : > dist/large.txt
+          # GitHub release assets are capped at 2147483647 bytes (2 GiB - 1).
+          # Any .img.xz over that limit is split into consecutive byte chunks:
+          #   <name>.img.xz          (part 1, the canonical name)
+          #   <name>.img.xz.part2    (part 2)
+          #   <name>.img.xz.part3    (part 3) ...
+          # The parts are shipped as release assets; reassemble them to get
+          # the raw .img.
+          for f in dist/*.img.xz; do
+            [ -f "$f" ] || continue
+            base=$(basename "$f")
+            sz=$(stat -c %s "$f")
+            if [ "$sz" -gt 2147483647 ]; then
+              echo "splitting $base ($sz bytes)"
+              tmpdir=$(mktemp -d)
+              split -b 2147483647 -d -a 3 "$f" "$tmpdir/chunk"
+              i=1
+              for p in "$tmpdir"/chunk*; do
+                if [ "$i" -eq 1 ]; then
+                  mv "$p" "dist/$base"
+                else
+                  mv "$p" "dist/${base}.part$i"
+                fi
+                i=$((i + 1))
+              done
+              rm -rf "$tmpdir"
+              echo "$base: split into $((i - 1)) parts" >> dist/large.txt
+            else
+              echo "$base: single part ($sz bytes)" >> dist/large.txt
+            fi
+          done
+          if [ ! -s dist/large.txt ]; then
+            echo "(no oversized assets)" > dist/large.txt
+          fi
+          echo "split status:"; cat dist/large.txt
+
+      - name: Assemble checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          echo "==== release contents ===="
+          ls -lh
+          echo
+          echo "==== checksums ===="
+          cat *.img.xz.sha256 payload.sha256 2>/dev/null || true
+
+      - name: Move tag to current commit
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const ref = 'tags/${{ needs.prepare.outputs.tag }}';
+            try {
+              await github.rest.git.updateRef({ ...context.repo, ref, sha: context.sha, force: true });
+            } catch (e) {
+              if (e.status !== 422) throw e;
+              await github.rest.git.createRef({ ...context.repo, ref: 'refs/tags/${{ needs.prepare.outputs.tag }}', sha: context.sha });
+            }
+            core.info('tag ${{ needs.prepare.outputs.tag }} -> ' + context.sha);
+
+      - name: Build release body
+        run: |
+          set -euo pipefail
+          {
+            echo "PS5 Linux Loader release \`${{ needs.prepare.outputs.tag }}\` (commit \`${{ github.sha }}\`)."
+            echo
+            echo "Contains the loader payload (\`ps5-linux-loader.elf\`), the M.2/storage"
+            echo "tooling (\`m2_init\`, \`ps5-osinstall\`, \`ps5-osexec\`), and wrapped"
+            echo "\"OS images\" (official ps5-linux images with the tooling baked in)."
+            echo
+            echo "The payload serves a WebUI on port 8080 with an OS-image picker,"
+            echo "install target/size selector, VRAM setting, file manager, anonymous"
+            echo "FTP (port 21), and a hardware/driver support table."
+            echo
+            echo "There is no auto-boot: open the WebUI, pick an OS image and target,"
+            echo "set VRAM, and click Boot Linux. Transfer large .img files over FTP"
+            echo "(port 21) while the page is open."
+            echo
+            echo "OS images attached to this release (each .img.xz, or its"
+            echo "≤2 GB parts, is a release asset):"
+            for f in dist/*.img.xz; do
+              [ -f "$f" ] || continue
+              base=$(basename "$f")
+              # Count ALL parts: part 1 (the canonical .img.xz) plus any
+              # .partN files. nparts is the total number of byte chunks.
+              nparts=$((1 + $(find dist -maxdepth 1 -name "${base}.part*" -type f | wc -l | tr -d ' ')))
+              if [ "$nparts" -gt 1 ]; then
+                echo "- $base (${nparts} parts: ${base} .. ${base}.part${nparts})"
+              else
+                echo "- $base"
+              fi
+            done
+            echo
+            echo "Boot files for USB-free setups (each tarball holds bzImage,"
+            echo "initrd.img, cmdline.txt, vram.txt; initrd.img is patched to"
+            echo "loop-mount the .img at boot):"
+            for f in dist/*-boot.tar.gz; do
+              [ -f "$f" ] || continue
+              echo "- $(basename "$f")"
+            done
+            echo
+            echo "VRAM can be set from the payload WebUI (0 = auto, uses vram.txt)."
+            echo "WiFi firmware is dumped from the PS5 automatically during boot."
+            echo
+            echo "The .img itself is transferred to the PS5 separately and the"
+            echo "loader derives cmdline (root label) and VRAM from the selected"
+            echo ".img automatically."
+          } > dist/body.md
+          cat dist/body.md
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: ${{ needs.prepare.outputs.tag }}
+          body_path: dist/body.md
+          files: |
+            dist/ps5-linux-loader.elf
+            dist/m2_init
+            dist/ps5-osinstall
+            dist/ps5-osexec
+            dist/payload.sha256
+            dist/*.img.xz
+            dist/*.img.xz.part*
+            dist/*.img.xz.sha256
+            dist/*.img.osimage
+            dist/*-boot.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
